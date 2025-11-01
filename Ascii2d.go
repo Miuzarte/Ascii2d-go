@@ -160,16 +160,11 @@ func (c *Client) Post(ctx context.Context, imgData []byte) (colorResult Result, 
 		return Result{}, Result{}, bovwErr
 	}
 
-	wg.Go(func() {
-		colorResult, colorErr = c.GetResult(strings.NewReader(colorBody), colorUrl)
-	})
-	wg.Go(func() {
-		bovwResult, bovwErr = c.GetResult(strings.NewReader(bovwBody), bovwUrl)
-	})
-	wg.Wait()
+	colorResult, colorErr = c.getResult(colorBody, colorUrl)
 	if colorErr != nil {
 		return Result{}, Result{}, colorErr
 	}
+	bovwResult, bovwErr = c.getResult(bovwBody, bovwUrl)
 	if bovwErr != nil {
 		return Result{}, Result{}, bovwErr
 	}
@@ -199,20 +194,22 @@ func (c *Client) Get(ctx context.Context, imgUrl string) (colorResult Result, bo
 	}
 	bovwBody := resp.Solution.Response
 
-	colorResult, err = c.GetResult(strings.NewReader(colorBody), colorUrl)
+	colorResult, err = c.getResult(colorBody, colorUrl)
 	if err != nil {
 		return Result{}, Result{}, err
 	}
-	bovwResult, err = c.GetResult(strings.NewReader(bovwBody), bovwUrl)
+	bovwResult, err = c.getResult(bovwBody, bovwUrl)
 	if err != nil {
 		return Result{}, Result{}, err
 	}
 
+	colorResult.ResultUrl = colorUrl
+	bovwResult.ResultUrl = bovwUrl
 	return colorResult, bovwResult, nil
 }
 
-func (c *Client) GetResult(body io.Reader, resultUrl string) (res Result, err error) {
-	doc, err := goquery.NewDocumentFromReader(body)
+func (c *Client) getResult(body string, resultUrl string) (res Result, err error) {
+	doc, err := goquery.NewDocumentFromReader(strings.NewReader(body))
 	if err != nil {
 		return Result{}, err
 	}
@@ -272,7 +269,7 @@ func (c *Client) GetResult(body io.Reader, resultUrl string) (res Result, err er
 	})
 
 	if !found {
-		return Result{}, errors.New("Ascii2d.GetResult: failed to parse detail")
+		return Result{}, fmt.Errorf("Ascii2d.GetResult: failed to parse detail: %s", doc.Text())
 	}
 	return res, nil
 }
