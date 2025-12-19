@@ -28,7 +28,7 @@ const (
 type Client struct {
 	Host               string
 	FlareSolverrClient *fs.Client
-	NumResults         int // TODO: 显式指定返回的结果数量
+	NumResults         int // [TODO] 显式指定返回的结果数量
 }
 
 func NewClient(overrideHost string, fsClient *fs.Client) *Client {
@@ -225,10 +225,9 @@ func (c *Client) getResult(body string, resultUrl string) (res Result, err error
 	found := false
 
 	doc.Find(".item-box").EachWithBreak(func(i int, box *goquery.Selection) bool {
-		// external := box.Find(".external") // 人为提交结果
 		links := box.Find(".detail-box a")
 
-		// 普通结果
+		// [TODO] multi results
 		if links.Length() > 0 {
 			titleSel := links.Eq(0)
 			authorSel := links.Eq(1)
@@ -243,7 +242,9 @@ func (c *Client) getResult(body string, resultUrl string) (res Result, err error
 
 				ResultUrl:  resultUrl,
 				ResultType: resultType,
-				Success:    true,
+
+				Success:              true,
+				IsRegisteredManually: box.Find(".external").Length() > 0,
 			}
 			found = res.Title != ""
 			return !found // break if found
@@ -267,5 +268,7 @@ type Result struct {
 
 	ResultUrl  string
 	ResultType string // "color" | "bovw"
-	Success    bool
+
+	Success              bool
+	IsRegisteredManually bool
 }
