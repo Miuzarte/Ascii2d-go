@@ -47,7 +47,7 @@ func NewClient(overrideHost string, fsClient *fs.Client) *Client {
 	}
 }
 
-func (c *Client) Search(ctx context.Context, image any) (colorResult Result, bovwResult Result, err error) {
+func (c *Client) Search(ctx context.Context, image any) (color Result, bovw Result, err error) {
 	switch img := image.(type) {
 	case string:
 		if strings.HasPrefix(img, "http") {
@@ -76,7 +76,7 @@ func (c *Client) Search(ctx context.Context, image any) (colorResult Result, bov
 	}
 }
 
-func (c *Client) Post(ctx context.Context, imgData []byte) (colorResult Result, bovwResult Result, err error) {
+func (c *Client) Post(ctx context.Context, imgData []byte) (color Result, bovw Result, err error) {
 	buf := bytes.Buffer{}
 	writer := multipart.NewWriter(&buf)
 
@@ -160,21 +160,21 @@ func (c *Client) Post(ctx context.Context, imgData []byte) (colorResult Result, 
 		return Result{}, Result{}, bovwErr
 	}
 
-	colorResult, colorErr = c.getResult(colorBody, colorUrl)
+	color, colorErr = c.getResult(colorBody, colorUrl)
 	if colorErr != nil {
 		return Result{}, Result{}, colorErr
 	}
-	bovwResult, bovwErr = c.getResult(bovwBody, bovwUrl)
+	bovw, bovwErr = c.getResult(bovwBody, bovwUrl)
 	if bovwErr != nil {
 		return Result{}, Result{}, bovwErr
 	}
 
-	colorResult.ResultUrl = colorUrl
-	bovwResult.ResultUrl = bovwUrl
-	return colorResult, bovwResult, nil
+	color.ResultUrl = colorUrl
+	bovw.ResultUrl = bovwUrl
+	return color, bovw, nil
 }
 
-func (c *Client) Get(ctx context.Context, imgUrl string) (colorResult Result, bovwResult Result, err error) {
+func (c *Client) Get(ctx context.Context, imgUrl string) (color Result, bovw Result, err error) {
 	searchUrl := c.Host + API_SEARCH_URL + "/" + imgUrl
 
 	resp, err := c.FlareSolverrClient.Get(ctx, searchUrl, map[string]any{
@@ -194,18 +194,18 @@ func (c *Client) Get(ctx context.Context, imgUrl string) (colorResult Result, bo
 	}
 	bovwBody := resp.Solution.Response
 
-	colorResult, err = c.getResult(colorBody, colorUrl)
+	color, err = c.getResult(colorBody, colorUrl)
 	if err != nil {
 		return Result{}, Result{}, err
 	}
-	bovwResult, err = c.getResult(bovwBody, bovwUrl)
+	bovw, err = c.getResult(bovwBody, bovwUrl)
 	if err != nil {
 		return Result{}, Result{}, err
 	}
 
-	colorResult.ResultUrl = colorUrl
-	bovwResult.ResultUrl = bovwUrl
-	return colorResult, bovwResult, nil
+	color.ResultUrl = colorUrl
+	bovw.ResultUrl = bovwUrl
+	return color, bovw, nil
 }
 
 func (c *Client) getResult(body string, resultUrl string) (res Result, err error) {
@@ -225,24 +225,8 @@ func (c *Client) getResult(body string, resultUrl string) (res Result, err error
 	found := false
 
 	doc.Find(".item-box").EachWithBreak(func(i int, box *goquery.Selection) bool {
-		external := box.Find(".external")
+		// external := box.Find(".external") // 人为提交结果
 		links := box.Find(".detail-box a")
-
-		// 人为提交结果
-		if external.Length() > 0 {
-			thumb, _ := box.Find(".image-box img").Attr("src")
-
-			res = Result{
-				Title:     external.Text(),
-				Thumbnail: c.Host + thumb,
-
-				ResultUrl:  resultUrl,
-				ResultType: resultType,
-				Success:    true,
-			}
-			found = res.Title != ""
-			return !found
-		}
 
 		// 普通结果
 		if links.Length() > 0 {
@@ -265,11 +249,11 @@ func (c *Client) getResult(body string, resultUrl string) (res Result, err error
 			return !found // break if found
 		}
 
-		return true
+		return true // continue
 	})
 
 	if !found {
-		return Result{}, fmt.Errorf("Ascii2d.GetResult: failed to parse detail: %s", doc.Text())
+		return Result{}, fmt.Errorf("getResult: failed to parse detail: %s", doc.Text())
 	}
 	return res, nil
 }
