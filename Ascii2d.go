@@ -29,6 +29,10 @@ type Client struct {
 	Host               string
 	FlareSolverrClient *fs.Client
 	NumResults         int // [TODO] 显式指定返回的结果数量
+
+	mu        sync.RWMutex
+	cookies   []*http.Cookie
+	userAgent string
 }
 
 func NewClient(overrideHost string, fsClient *fs.Client) *Client {
@@ -39,12 +43,23 @@ func NewClient(overrideHost string, fsClient *fs.Client) *Client {
 		if !strings.HasPrefix(overrideHost, "http") {
 			overrideHost = "https://" + overrideHost
 		}
-		host = strings.TrimRight(overrideHost, "/")
+		host = strings.TrimSuffix(overrideHost, "/")
 	}
 	return &Client{
 		Host:               host,
 		FlareSolverrClient: fsClient,
 	}
+}
+
+// saveCredentials 保存 FlareSolverr 过盾后的 cookies 和 UA,供 Download 复用
+func (c *Client) saveCredentials(sol *fs.Solution) {
+	if sol == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.cookies = sol.Cookies.ToHttpCookies()
+	c.userAgent = sol.UserAgent
 }
 
 func (c *Client) Search(ctx context.Context, image any) (color Result, bovw Result, err error) {
@@ -58,12 +73,18 @@ func (c *Client) Search(ctx context.Context, image any) (color Result, bovw Resu
 			if err != nil {
 				return Result{}, Result{}, err
 			}
-			defer f.Close()
-			return c.Search(ctx, f)
+			return c.Search(ctx, io.ReadCloser(f))
 		}
 
 	case []byte:
 		return c.Post(ctx, img)
+	case io.ReadCloser:
+		imgData, err := io.ReadAll(img)
+		_ = img.Close()
+		if err != nil {
+			return Result{}, Result{}, err
+		}
+		return c.Post(ctx, imgData)
 	case io.Reader:
 		imgData, err := io.ReadAll(img)
 		if err != nil {
@@ -140,6 +161,7 @@ func (c *Client) Post(ctx context.Context, imgData []byte) (color Result, bovw R
 			return
 		}
 		colorBody = resp.Solution.Response
+		c.saveCredentials(resp.Solution)
 	})
 	wg.Go(func() {
 		resp, err := c.FlareSolverrClient.Get(ctx, bovwUrl, map[string]any{
@@ -151,6 +173,7 @@ func (c *Client) Post(ctx context.Context, imgData []byte) (color Result, bovw R
 			return
 		}
 		bovwBody = resp.Solution.Response
+		c.saveCredentials(resp.Solution)
 	})
 	wg.Wait()
 	if colorErr != nil {
@@ -186,6 +209,7 @@ func (c *Client) Get(ctx context.Context, imgUrl string) (color Result, bovw Res
 	colorUrl := resp.Solution.Url
 	bovwUrl := strings.ReplaceAll(colorUrl, "/color/", "/bovw/")
 	colorBody := resp.Solution.Response
+	c.saveCredentials(resp.Solution)
 	resp, err = c.FlareSolverrClient.Get(ctx, bovwUrl, map[string]any{
 		fs.PARAM_MAX_TIMEOUT: 60000,
 	})
@@ -193,6 +217,7 @@ func (c *Client) Get(ctx context.Context, imgUrl string) (color Result, bovw Res
 		return Result{}, Result{}, err
 	}
 	bovwBody := resp.Solution.Response
+	c.saveCredentials(resp.Solution)
 
 	color, err = c.getResult(colorBody, colorUrl)
 	if err != nil {
@@ -271,4 +296,53 @@ type Result struct {
 
 	Success              bool
 	IsRegisteredManually bool
+}
+
+// Download 通过搜索时缓存的 FlareSolverr 凭证下载缩略图,返回图片字节
+// 若缓存为空则现取一次;调用点应对 error 做回退处理
+func (c *Client) Download(ctx context.Context, res Result) ([]byte, error) {
+	if res.Thumbnail == "" {
+		return nil, errors.New("thumbnail url is empty")
+	}
+
+	c.mu.RLock()
+	cookies := c.cookies
+	ua := c.userAgent
+	c.mu.RUnlock()
+
+	// 搜索后通常已有凭证;若没有(如直接调用 Download)则现取一次
+	if len(cookies) == 0 || ua == "" {
+		resp, err := c.FlareSolverrClient.Get(ctx, c.Host, map[string]any{
+			fs.PARAM_MAX_TIMEOUT:         60000,
+			fs.PARAM_RETURN_ONLY_COOKIES: true,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("FlareSolverr bypass failed: %w", err)
+		}
+		c.saveCredentials(resp.Solution)
+		cookies = resp.Solution.Cookies.ToHttpCookies()
+		ua = resp.Solution.UserAgent
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, res.Thumbnail, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", ua)
+	req.Header.Set("Referer", c.Host+"/")
+	for _, cookie := range cookies {
+		req.AddCookie(cookie)
+	}
+
+	httpResp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer httpResp.Body.Close()
+
+	if httpResp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("download thumbnail failed: %s", httpResp.Status)
+	}
+
+	return io.ReadAll(httpResp.Body)
 }
